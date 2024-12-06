@@ -188,6 +188,10 @@ func TestPolicyAssembleWhitelist(t *testing.T) {
 			ActionAllow,
 		},
 		{
+			SeccompData{NR: 56 /* clone */, Arch: uint32(arch.X86_64.ID)},
+			ActionAllow,
+		},
+		{
 			SeccompData{NR: 4, Arch: uint32(arch.X86_64.ID)},
 			ActionKillProcess,
 		},

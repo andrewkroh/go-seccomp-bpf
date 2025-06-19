@@ -124,9 +124,9 @@ type Policy struct {
 // SyscallGroup is a logical block within a Policy that contains a set of
 // syscalls to match against and an action to take.
 type SyscallGroup struct {
-	Names              []string             `config:"names"  json:"names"  yaml:"names"`                              // List of syscall names (all must exist).
-	NamesWithCondtions []NameWithConditions `config:"names_with_args" json:"names_with_args"  yaml:"names_with_args"` // List of syscall with argument filters
-	Action             Action               `config:"action" validate:"required" json:"action" yaml:"action"`         // Action to take upon a match.
+	Names               []string             `config:"names"  json:"names"  yaml:"names"`                              // List of syscall names (all must exist).
+	NamesWithConditions []NameWithConditions `config:"names_with_args" json:"names_with_args"  yaml:"names_with_args"` // List of syscall with argument filters
+	Action              Action               `config:"action" validate:"required" json:"action" yaml:"action"`         // Action to take upon a match.
 
 	arch *arch.Info
 }
@@ -215,21 +215,24 @@ func (p *Policy) Assemble() ([]bpf.Instruction, error) {
 
 	// Build the syscall filters.
 	var instructions []bpf.Instruction
+	prog := NewProgram()
 	for _, group := range p.Syscalls {
 		if group.arch == nil {
 			group.arch = p.arch
 		}
 
-		groupInsts, err := group.Assemble()
+		err := group.Assemble(&prog)
 		if err != nil {
 			return nil, err
 		}
 
-		instructions = append(instructions, groupInsts...)
 	}
+	prog.Ret(p.DefaultAction)
 
-	// Final instruction is the default action.
-	instructions = append(instructions, bpf.RetConstant{Val: uint32(p.DefaultAction)})
+	instructions, err := prog.Assemble()
+	if err != nil {
+		return nil, err
+	}
 
 	// Filter out x32 to prevent bypassing blacklists by using the 32-bit ABI.
 	var x32Filter []bpf.Instruction
@@ -316,7 +319,7 @@ func (g *SyscallGroup) toSyscallsWithConditions() ([]SyscallWithConditions, erro
 		}
 	}
 
-	for _, nc := range g.NamesWithCondtions {
+	for _, nc := range g.NamesWithConditions {
 		if num, found := g.arch.SyscallNames[nc.Name]; found {
 			syscall := uint32(num | g.arch.SeccompMask)
 			check := getSyscall(syscalls, syscall)
@@ -349,18 +352,16 @@ func (g *SyscallGroup) toSyscallsWithConditions() ([]SyscallWithConditions, erro
 	return syscalls, nil
 }
 
-func (g *SyscallGroup) Assemble() ([]bpf.Instruction, error) {
-	if len(g.Names)+len(g.NamesWithCondtions) == 0 {
-		return nil, nil
+func (g *SyscallGroup) Assemble(p *Program) error {
+	if len(g.Names)+len(g.NamesWithConditions) == 0 {
+		return nil
 	}
 
 	// Validate the syscalls.
 	syscalls, err := g.toSyscallsWithConditions()
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	p := NewProgram()
 
 	action := p.NewLabel() // Action instruction for the group on a match.
 	end := p.NewLabel()    // End of syscall group / start of next group.
@@ -369,15 +370,14 @@ func (g *SyscallGroup) Assemble() ([]bpf.Instruction, error) {
 		//
 		// The last instruction needs to jump past the action to the next group
 		// or the default action if there is no match.
-		syscall.Assemble(&p, i < len(syscalls)-1, action, end)
+		syscall.Assemble(p, i < len(syscalls)-1, action, end)
 	}
 
 	p.SetLabel(action)
 	p.Ret(g.Action)
 
 	p.SetLabel(end)
-
-	return p.Assemble()
+	return nil
 }
 
 func (s SyscallWithConditions) Assemble(p *Program, moreSyscalls bool, action, end Label) {
@@ -385,18 +385,30 @@ func (s SyscallWithConditions) Assemble(p *Program, moreSyscalls bool, action, e
 		// If no conditions are set, compare to the syscall number and jump to action if it matches.
 
 		if moreSyscalls {
-			p.JmpIfTrue(bpf.JumpEqual, s.Num, action)
+			p.JmpIf(bpf.JumpEqual, s.Num, action)
 		} else {
-			p.JmpIf(bpf.JumpEqual, s.Num, action, end)
+			p.JmpIfElse(bpf.JumpEqual, s.Num, action, end)
 		}
 		return
 	}
 
-	nextSyscall := p.NewLabel()
-	p.JmpIfTrue(bpf.JumpNotEqual, s.Num, nextSyscall)
+	var next Label
+	if moreSyscalls {
+		next = p.NewLabel()
+	} else {
+		next = end
+	}
+	p.JmpIf(bpf.JumpNotEqual, s.Num, next)
 
-	for _, conditions := range s.Conditions {
-		noMatch := p.NewLabel()
+	for j, conditions := range s.Conditions {
+		var nextCondition Label
+		moreConditions := j < len(s.Conditions)-1
+		if moreConditions {
+			nextCondition = p.NewLabel()
+		} else {
+			nextCondition = next
+		}
+
 		for i, c := range conditions {
 			nextArgument := p.NewLabel()
 
@@ -412,59 +424,63 @@ func (s SyscallWithConditions) Assemble(p *Program, moreSyscalls bool, action, e
 			if c.Operation == Equal {
 				// Arg_hi == Val_hi && Arg_lo == Val_lo
 				p.LdHi(c.Argument)
-				p.JmpIfTrue(bpf.JumpNotEqual, uint32(c.Value>>32), noMatch)
+				p.JmpIf(bpf.JumpNotEqual, uint32(c.Value>>32), nextCondition)
 				p.LdLo(c.Argument)
-				p.JmpIf(bpf.JumpEqual, uint32(c.Value), match, noMatch)
+				p.JmpIfElse(bpf.JumpEqual, uint32(c.Value), match, nextCondition)
 			} else if c.Operation == NotEqual {
 				// Arg_hi != Val_hi || Arg_lo != Val_lo
 				p.LdHi(c.Argument)
-				p.JmpIfTrue(bpf.JumpNotEqual, uint32(c.Value>>32), match)
+				p.JmpIf(bpf.JumpNotEqual, uint32(c.Value>>32), match)
 				p.LdLo(c.Argument)
-				p.JmpIf(bpf.JumpNotEqual, uint32(c.Value), match, noMatch)
+				p.JmpIfElse(bpf.JumpNotEqual, uint32(c.Value), match, nextCondition)
 			} else if c.Operation == GreaterThan {
 				// Arg_hi > Val_hi || (Arg_hi == Val_hi && Arg_lo > Val_lo)
 				p.LdHi(c.Argument)
-				p.JmpIfTrue(bpf.JumpGreaterThan, uint32(c.Value>>32), match)
-				p.JmpIfTrue(bpf.JumpNotEqual, uint32(c.Value>>32), noMatch)
+				p.JmpIf(bpf.JumpGreaterThan, uint32(c.Value>>32), match)
+				p.JmpIf(bpf.JumpNotEqual, uint32(c.Value>>32), nextCondition)
 				p.LdLo(c.Argument)
-				p.JmpIf(bpf.JumpGreaterThan, uint32(c.Value), match, noMatch)
+				p.JmpIfElse(bpf.JumpGreaterThan, uint32(c.Value), match, nextCondition)
 			} else if c.Operation == GreaterOrEqual {
 				// Arg_hi >= Val_hi || (Arg_hi == Val_hi && Arg_lo >= Val_lo)
 				p.LdHi(c.Argument)
-				p.JmpIfTrue(bpf.JumpGreaterThan, uint32(c.Value>>32), match)
-				p.JmpIfTrue(bpf.JumpNotEqual, uint32(c.Value>>32), noMatch)
+				p.JmpIf(bpf.JumpGreaterThan, uint32(c.Value>>32), match)
+				p.JmpIf(bpf.JumpNotEqual, uint32(c.Value>>32), nextCondition)
 				p.LdLo(c.Argument)
-				p.JmpIf(bpf.JumpGreaterOrEqual, uint32(c.Value), match, noMatch)
+				p.JmpIfElse(bpf.JumpGreaterOrEqual, uint32(c.Value), match, nextCondition)
 			} else if c.Operation == LessThan {
 				// Arg_hi < Val_hi || (Arg_hi == Val_hi && Arg_lo < Val_lo)
 				p.LdHi(c.Argument)
-				p.JmpIfTrue(bpf.JumpLessThan, uint32(c.Value>>32), match)
-				p.JmpIfTrue(bpf.JumpNotEqual, uint32(c.Value>>32), noMatch)
+				p.JmpIf(bpf.JumpLessThan, uint32(c.Value>>32), match)
+				p.JmpIf(bpf.JumpNotEqual, uint32(c.Value>>32), nextCondition)
 				p.LdLo(c.Argument)
-				p.JmpIf(bpf.JumpLessThan, uint32(c.Value), match, noMatch)
+				p.JmpIfElse(bpf.JumpLessThan, uint32(c.Value), match, nextCondition)
 			} else if c.Operation == LessOrEqual {
 				// Arg_hi <= Val_hi || (Arg_hi == Val_hi && Arg_lo <= Val_lo)
 				p.LdHi(c.Argument)
-				p.JmpIfTrue(bpf.JumpLessThan, uint32(c.Value>>32), match)
-				p.JmpIfTrue(bpf.JumpNotEqual, uint32(c.Value>>32), noMatch)
+				p.JmpIf(bpf.JumpLessThan, uint32(c.Value>>32), match)
+				p.JmpIf(bpf.JumpNotEqual, uint32(c.Value>>32), nextCondition)
 				p.LdLo(c.Argument)
-				p.JmpIf(bpf.JumpLessOrEqual, uint32(c.Value), match, noMatch)
+				p.JmpIfElse(bpf.JumpLessOrEqual, uint32(c.Value), match, nextCondition)
 			} else if c.Operation == BitsSet {
 				// (Arg_hi & Val_hi == 0) || (Arg_lo & Val_lo == 0)
 				p.LdHi(c.Argument)
-				p.JmpIfTrue(bpf.JumpBitsSet, uint32(c.Value>>32), match)
+				p.JmpIf(bpf.JumpBitsSet, uint32(c.Value>>32), match)
 				p.LdLo(c.Argument)
-				p.JmpIf(bpf.JumpBitsSet, uint32(c.Value), match, noMatch)
+				p.JmpIfElse(bpf.JumpBitsSet, uint32(c.Value), match, nextCondition)
 			} else if c.Operation == BitsNotSet {
 				// (Arg_hi & Val_hi != 0) && (Arg_lo & Val_lo != 0)
 				p.LdHi(c.Argument)
-				p.JmpIfTrue(bpf.JumpBitsSet, uint32(c.Value>>32), noMatch)
+				p.JmpIf(bpf.JumpBitsSet, uint32(c.Value>>32), nextCondition)
 				p.LdLo(c.Argument)
-				p.JmpIf(bpf.JumpBitsNotSet, uint32(c.Value), match, noMatch)
+				p.JmpIfElse(bpf.JumpBitsNotSet, uint32(c.Value), match, nextCondition)
 			}
 			p.SetLabel(nextArgument)
 		}
-		p.SetLabel(noMatch)
+		if moreConditions {
+			p.SetLabel(nextCondition)
+		}
 	}
-	p.SetLabel(nextSyscall)
+	if moreSyscalls {
+		p.SetLabel(next)
+	}
 }

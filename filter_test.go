@@ -60,7 +60,7 @@ func simulateSyscalls(t testing.TB, policy *Policy, tests []SeccompTest) {
 
 	filter, err := policy.Assemble()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("failed to assemble policy: %v", err)
 	}
 
 	if *dump {
@@ -333,7 +333,7 @@ func TestSimpleConditions(t *testing.T) {
 					{
 						Names:  []string{},
 						Action: ActionKillThread,
-						NamesWithCondtions: []NameWithConditions{
+						NamesWithConditions: []NameWithConditions{
 							{
 								Name: "read",
 								Conditions: []Condition{
@@ -347,9 +347,6 @@ func TestSimpleConditions(t *testing.T) {
 						},
 					},
 				},
-			}
-			if *dump {
-				policy.Dump(os.Stdout)
 			}
 
 			syscalls := make([]SeccompTest, 0, len(conditionInput))
@@ -381,7 +378,7 @@ func TestTwoArgumentConditions(t *testing.T) {
 					{
 						Names:  []string{},
 						Action: ActionKillThread,
-						NamesWithCondtions: []NameWithConditions{
+						NamesWithConditions: []NameWithConditions{
 							{
 								Name: "read",
 								Conditions: []Condition{
@@ -452,9 +449,9 @@ func TestLongConditions(t *testing.T) {
 		DefaultAction: ActionAllow,
 		Syscalls: []SyscallGroup{
 			{
-				Names:              []string{},
-				Action:             ActionKillThread,
-				NamesWithCondtions: filter,
+				Names:               []string{},
+				Action:              ActionKillThread,
+				NamesWithConditions: filter,
 			},
 		},
 	}

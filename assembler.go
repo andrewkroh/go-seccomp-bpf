@@ -84,19 +84,19 @@ func NewProgram() Program {
 	}
 }
 
-// JmpIfTrue inserts a conditional jump.
+// JmpIf inserts a conditional jump.
 // If the condition is true, it jumps to the given label.
 // If it is false, the program flow continues with the next instruction.
-func (p *Program) JmpIfTrue(cond bpf.JumpTest, val uint32, trueLabel Label) {
+func (p *Program) JmpIf(cond bpf.JumpTest, val uint32, trueLabel Label) {
 	nextInst := p.NewLabel()
-	p.JmpIf(cond, val, trueLabel, nextInst)
+	p.JmpIfElse(cond, val, trueLabel, nextInst)
 	p.SetLabel(nextInst)
 }
 
-// JmpIf inserts a conditional jump.
+// JmpIfElse inserts a conditional jump.
 // If the condition is true, it jumps to the true label.
 // If it is false, it jumps to the false label.
-func (p *Program) JmpIf(cond bpf.JumpTest, val uint32, trueLabel Label, falseLabel Label) {
+func (p *Program) JmpIfElse(cond bpf.JumpTest, val uint32, trueLabel, falseLabel Label) {
 	p.jumps = append(p.jumps, JumpIf{index: p.currentIndex(), trueLabel: trueLabel, falseLabel: falseLabel})
 
 	inst := bpf.JumpIf{Cond: cond, Val: val}

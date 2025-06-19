@@ -63,6 +63,12 @@ func simulateSyscalls(t testing.TB, policy *Policy, tests []SeccompTest) {
 		t.Fatal(err)
 	}
 
+	if *dump {
+		if err := policy.Dump(os.Stdout); err != nil {
+			t.Fatalf("failed to dump policy: %v", err)
+		}
+	}
+
 	vm, err := bpf.NewVM(filter)
 	if err != nil {
 		t.Fatal(err)
@@ -129,28 +135,32 @@ func TestPolicyAssembleBlacklist(t *testing.T) {
 				Names:  []string{"execve", "fork"},
 				Action: ActionKillThread,
 			},
+			{
+				Names:  []string{"bpf"},
+				Action: ActionLog,
+			},
 		},
-	}
-
-	if *dump {
-		policy.Dump(os.Stdout)
 	}
 
 	simulateSyscalls(t, policy, []SeccompTest{
 		{
-			SeccompData{NR: 59, Arch: uint32(arch.X86_64.ID)},
+			SeccompData{NR: 59 /* execve */, Arch: uint32(arch.X86_64.ID)},
 			ActionKillThread,
 		},
 		{
-			SeccompData{NR: 57, Arch: uint32(arch.X86_64.ID)},
+			SeccompData{NR: 57 /* fork */, Arch: uint32(arch.X86_64.ID)},
 			ActionKillThread,
 		},
 		{
-			SeccompData{NR: 4, Arch: uint32(arch.X86_64.ID)},
+			SeccompData{NR: 321 /* bpf */, Arch: uint32(arch.X86_64.ID)},
+			ActionLog,
+		},
+		{
+			SeccompData{NR: 4 /* stat */, Arch: uint32(arch.X86_64.ID)},
 			ActionAllow,
 		},
 		{
-			SeccompData{NR: 4, Arch: uint32(arch.ARM.ID)},
+			SeccompData{NR: 4 /* write */, Arch: uint32(arch.ARM.ID)},
 			ActionAllow,
 		},
 		{
@@ -178,13 +188,13 @@ func TestPolicyAssembleWhitelist(t *testing.T) {
 		},
 	}
 
-	if *dump {
-		policy.Dump(os.Stdout)
-	}
-
 	simulateSyscalls(t, policy, []SeccompTest{
 		{
-			SeccompData{NR: 59, Arch: uint32(arch.X86_64.ID)},
+			SeccompData{NR: 59 /* execve */, Arch: uint32(arch.X86_64.ID)},
+			ActionAllow,
+		},
+		{
+			SeccompData{NR: 57 /* fork */, Arch: uint32(arch.X86_64.ID)},
 			ActionAllow,
 		},
 		{
@@ -251,10 +261,6 @@ func TestPolicyAssembleLongList(t *testing.T) {
 				},
 			}
 
-			if *dump {
-				policy.Dump(os.Stdout)
-			}
-
 			simulateSyscalls(t, policy, tests)
 		})
 	}
@@ -307,10 +313,6 @@ func TestSimpleLongList(t *testing.T) {
 				Action: ActionKillThread,
 			},
 		},
-	}
-
-	if *dump {
-		policy.Dump(os.Stdout)
 	}
 
 	simulateSyscalls(t, policy, []SeccompTest{
@@ -455,10 +457,6 @@ func TestLongConditions(t *testing.T) {
 				NamesWithCondtions: filter,
 			},
 		},
-	}
-
-	if *dump {
-		policy.Dump(os.Stdout)
 	}
 
 	lastCheck := uint64(len(filter)-1) * 6

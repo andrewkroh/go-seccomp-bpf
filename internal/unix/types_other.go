@@ -23,27 +23,42 @@ package unix
 const PR_SET_NO_NEW_PRIVS = 0x26
 
 const (
+	// SECCOMP_SET_MODE_STRICT enables strict seccomp mode, which only allows read(), write(),
+	// _exit(), and sigreturn() syscalls.
 	SECCOMP_SET_MODE_STRICT = 0x0
+	// SECCOMP_SET_MODE_FILTER enables filter mode, which allows filtering syscalls via BPF programs.
 	SECCOMP_SET_MODE_FILTER = 0x1
 )
 
 const (
-	SECCOMP_RET_KILL_THREAD  = 0x0
+	// SECCOMP_RET_KILL_THREAD terminates the calling thread.
+	SECCOMP_RET_KILL_THREAD = 0x0
+	// SECCOMP_RET_KILL_PROCESS terminates the entire process.
 	SECCOMP_RET_KILL_PROCESS = 0x80000000
-	SECCOMP_RET_TRAP         = 0x30000
-	SECCOMP_RET_ERRNO        = 0x50000
-	SECCOMP_RET_TRACE        = 0x7ff00000
-	SECCOMP_RET_LOG          = 0x7ffc0000
-	SECCOMP_RET_ALLOW        = 0x7fff0000
-	SECCOMP_RET_USER_NOTIF   = 0x7fc00000
+	// SECCOMP_RET_TRAP generates a SIGSYS signal for the calling thread.
+	SECCOMP_RET_TRAP = 0x30000
+	// SECCOMP_RET_ERRNO causes the syscall to return an error with the specified errno value.
+	SECCOMP_RET_ERRNO = 0x50000
+	// SECCOMP_RET_TRACE notifies the tracing process via PTRACE_EVENT_SECCOMP.
+	SECCOMP_RET_TRACE = 0x7ff00000
+	// SECCOMP_RET_LOG allows the syscall to proceed but logs it.
+	SECCOMP_RET_LOG = 0x7ffc0000
+	// SECCOMP_RET_ALLOW allows the syscall to proceed.
+	SECCOMP_RET_ALLOW = 0x7fff0000
+	// SECCOMP_RET_USER_NOTIF handles syscalls via user-space notification.
+	SECCOMP_RET_USER_NOTIF = 0x7fc00000
 )
 
 const (
-	EPERM  = 0x1
+	// EPERM represents the "Operation not permitted" error (errno 1).
+	EPERM = 0x1
+	// ENOSYS represents the "Function not implemented" error (errno 38).
 	ENOSYS = 0x26
 )
 
 const (
+	// SECCOMP_FILTER_FLAG_TSYNC synchronizes the filter across all threads in the process.
 	SECCOMP_FILTER_FLAG_TSYNC = 0x1
-	SECCOMP_FILTER_FLAG_LOG   = 0x2
+	// SECCOMP_FILTER_FLAG_LOG logs all filter actions except SECCOMP_RET_ALLOW.
+	SECCOMP_FILTER_FLAG_LOG = 0x2
 )

@@ -220,13 +220,16 @@ func (p *Policy) Assemble() ([]bpf.Instruction, error) {
 			group.arch = p.arch
 		}
 
-		groupInsts, err := group.Assemble(p.DefaultAction)
+		groupInsts, err := group.Assemble()
 		if err != nil {
 			return nil, err
 		}
 
 		instructions = append(instructions, groupInsts...)
 	}
+
+	// Final instruction is the default action.
+	instructions = append(instructions, bpf.RetConstant{Val: uint32(p.DefaultAction)})
 
 	// Filter out x32 to prevent bypassing blacklists by using the 32-bit ABI.
 	var x32Filter []bpf.Instruction
@@ -242,11 +245,11 @@ func (p *Policy) Assemble() ([]bpf.Instruction, error) {
 	program = append(program, bpf.LoadAbsolute{Off: archOffset, Size: sizeOfUint32})
 
 	// If the loaded arch ID is not equal p.arch.ID, jump to the final Ret instruction.
-	jumpN := len(x32Filter) + len(instructions) - 1
+	jumpN := len(x32Filter) + len(instructions)
 	if jumpN <= 255 {
 		program = append(program, bpf.JumpIf{Cond: bpf.JumpNotEqual, Val: uint32(p.arch.ID), SkipTrue: uint8(jumpN)})
 	} else {
-		// JumpIf can not handle long jumps, so we switch to two instructions for this case.
+		// JumpIf cannot handle long jumps, so we switch to two instructions for this case.
 		program = append(program, bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(p.arch.ID), SkipTrue: 1})
 		program = append(program, bpf.Jump{Skip: uint32(jumpN)})
 	}
@@ -257,11 +260,11 @@ func (p *Policy) Assemble() ([]bpf.Instruction, error) {
 	return program, nil
 }
 
-// Dump writes a textual represenation of the BPF instructions to out.
+// Dump writes a textual representation of the BPF instructions to out.
 func (p *Policy) Dump(out io.Writer) error {
 	assembled, err := p.Assemble()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to assemble policy: %w", err)
 	}
 
 	for n, instruction := range assembled {
@@ -346,8 +349,8 @@ func (g *SyscallGroup) toSyscallsWithConditions() ([]SyscallWithConditions, erro
 	return syscalls, nil
 }
 
-func (g *SyscallGroup) Assemble(defaultAction Action) ([]bpf.Instruction, error) {
-	if len(g.Names) == 0 && len(g.NamesWithCondtions) == 0 {
+func (g *SyscallGroup) Assemble() ([]bpf.Instruction, error) {
+	if len(g.Names)+len(g.NamesWithCondtions) == 0 {
 		return nil, nil
 	}
 
@@ -359,23 +362,33 @@ func (g *SyscallGroup) Assemble(defaultAction Action) ([]bpf.Instruction, error)
 
 	p := NewProgram()
 
-	action := p.NewLabel()
-	for _, syscall := range syscalls {
-		syscall.Assemble(&p, action)
+	action := p.NewLabel() // Action instruction for the group on a match.
+	end := p.NewLabel()    // End of syscall group / start of next group.
+	for i, syscall := range syscalls {
+		// If the syscall matches, jump to the action.
+		//
+		// The last instruction needs to jump past the action to the next group
+		// or the default action if there is no match.
+		syscall.Assemble(&p, i < len(syscalls)-1, action, end)
 	}
-
-	p.Ret(defaultAction)
 
 	p.SetLabel(action)
 	p.Ret(g.Action)
 
+	p.SetLabel(end)
+
 	return p.Assemble()
 }
 
-func (s SyscallWithConditions) Assemble(p *Program, action Label) {
+func (s SyscallWithConditions) Assemble(p *Program, moreSyscalls bool, action, end Label) {
 	if len(s.Conditions) == 0 {
 		// If no conditions are set, compare to the syscall number and jump to action if it matches.
-		p.JmpIfTrue(bpf.JumpEqual, s.Num, action)
+
+		if moreSyscalls {
+			p.JmpIfTrue(bpf.JumpEqual, s.Num, action)
+		} else {
+			p.JmpIf(bpf.JumpEqual, s.Num, action, end)
+		}
 		return
 	}
 

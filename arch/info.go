@@ -30,7 +30,7 @@ type Info struct {
 	ID             AuditArch      // Linux audit architecture constant.
 	SyscallNames   map[string]int // Mapping of syscall names to numbers.
 	SyscallNumbers map[int]string // Mapping of syscall numbers to names.
-	SeccompMask    int            // A mask to apply to syscall numbers in BPF instructions (e.g. X32_SYSCALL_BIT).
+	SeccompMask    int            // A mask to apply to syscall numbers in BPF instructions (e.g., X32_SYSCALL_BIT).
 }
 
 // Linux architecture types.
@@ -159,8 +159,9 @@ var arches = map[string]*Info{
 	"mips64p32le": MIPSEL64N32,
 }
 
-// GetInfo returns the arch Info associated with the given architecture name.
-// If an architecture is not fully implemented it will return an error.
+// GetInfo returns the arch Info associated with the given Go architecture name.
+// If an architecture is not fully implemented, it will return an error.
+// If the name is empty, it will default to the value of runtime.GOARCH.
 func GetInfo(name string) (*Info, error) {
 	if name == "" {
 		name = runtime.GOARCH

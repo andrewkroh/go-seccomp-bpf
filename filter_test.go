@@ -425,10 +425,10 @@ func TestTwoArgumentConditions(t *testing.T) {
 
 func TestLongConditions(t *testing.T) {
 	filter := make([]NameWithConditions, 0, 20)
-	for i := uint64(0); i < 20; i++ {
+	for i := range uint64(20) {
 
 		arguments := make([]Condition, 0, 6)
-		for arg := uint32(0); arg < 6; arg++ {
+		for arg := range uint32(6) {
 			argument := Condition{
 				Argument:  arg,
 				Operation: Equal,
